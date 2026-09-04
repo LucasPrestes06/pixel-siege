@@ -5,11 +5,17 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
+
 const io = new Server(server, {
-  cors: { origin: "*" }
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
 
 const PORT = process.env.PORT || 3000;
+
+// Servir os arquivos estáticos da pasta public
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Gerenciamento de salas na memória do servidor
