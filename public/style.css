@@ -280,3 +280,19 @@ canvas#uiLayer{
   .brand h1{font-size:1.5rem;}
   .code-letter{width:40px;height:48px;font-size:1.4rem;}
 }
+/* ---------- ADIÇÕES v2 (online) ---------- */
+.conn{ margin-top:10px; font-size:.65rem; letter-spacing:1px; color:var(--ink-dim); }
+.conn.ok{ color:var(--lime); }
+.conn.bad{ color:var(--magenta); }
+.controls{
+  margin-top:18px; padding-top:12px; border-top:1px solid var(--line);
+  font-size:.62rem; line-height:1.7; color:var(--ink-dim); letter-spacing:.3px;
+}
+.controls b{ display:block; color:var(--ink); letter-spacing:1px; margin-bottom:2px; }
+#respawnOverlay .by{ color:var(--ink-dim); font-size:.8rem; letter-spacing:1px; margin-bottom:6px; }
+#scoreboard .srow .d{ color:var(--ink-dim); min-width:18px; text-align:right; }
+#scoreboard .srow.me span:first-of-type{ color:var(--cyan); }
+#killfeed div.me{ border-left-color:var(--amber); }
+.player-list li.dc{ opacity:.5; }
+#hpLabel span{ color:var(--ink); }
+#scoreboard{ top:44px; }

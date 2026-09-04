@@ -1,121 +1,107 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-br">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PIXEL SIEGE — Online</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
-    body { background: #080b10; color: #eef2f8; font-family: 'Courier New', monospace; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }
-    #stage { position: relative; width: 720px; height: 405px; background: #0d1420; border: 2px solid #1c2433; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
-    canvas { position: absolute; top:0; left:0; width:100%; height:100%; }
-    #uiLayer { pointer-events: none; z-index: 5; }
-    .screen { position: absolute; inset:0; display:none; flex-direction:column; justify-content:center; align-items:center; background: rgba(13,20,32,0.95); z-index: 10; padding:20px; text-align:center; }
-    .screen.active { display: flex; }
-    h1 { font-size: 28px; color: #3ee6d6; letter-spacing: 2px; margin-bottom: 15px; text-shadow: 2px 2px #000; }
-    p { font-size: 12px; color: #8a99ad; margin-bottom: 20px; max-width: 400px; }
-    input { background: #12161f; border: 1px solid #2f3b52; color: #fff; padding: 10px; font-family: inherit; font-size: 14px; text-align: center; margin-bottom: 10px; width: 220px; outline: none; text-transform: uppercase; }
-    input:focus { border-color: #3ee6d6; }
-    button { background: #3ee6d6; color: #080b10; border: none; padding: 10px 20px; font-family: inherit; font-weight: bold; font-size: 14px; cursor: pointer; margin: 5px; transition: 0.1s; }
-    button:hover { background: #5ac8ff; transform: scale(1.02); }
-    button.alt { background: #ff3d6e; color: #fff; }
-    button.alt:hover { background: #ff5ac0; }
-    #codeBox { display: flex; gap: 8px; margin: 15px 0; }
-    .code-letter { font-size: 24px; font-weight: bold; background: #12161f; border: 1px solid #3ee6d6; color: #ffb02e; width: 40px; height: 45px; display: flex; justify-content: center; align-items: center; }
-    #playerList { list-style: none; margin: 10px 0 20px; width: 220px; text-align: left; background: #12161f; border: 1px solid #1c2433; padding: 8px; }
-    #playerList li { font-size: 12px; padding: 4px 0; display: flex; align-items: center; gap: 8px; }
-    .swatch { width: 10px; height: 10px; display: inline-block; }
-    .tag-host { font-size: 9px; background: #ffb02e; color: #000; padding: 1px 3px; margin-left: auto; font-weight: bold; }
-    .tag-you { font-size: 9px; background: #3ee6d6; color: #000; padding: 1px 3px; margin-left: auto; font-weight: bold; }
-    #hud { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:4; display:flex; flex-direction:column; justify-content:space-between; padding:10px; }
-    .hud-top { display:flex; justify-content:space-between; align-items:flex-start; }
-    #hpBar { width: 120px; height: 10px; background: #12161f; border: 1px solid #2f3b52; }
-    #hpFill { width: 100%; height: 100%; background: #3ee6d6; transition: width 0.1s; }
-    #roomTag { font-size: 10px; color: #8a99ad; background: rgba(0,0,0,0.5); padding: 4px 8px; }
-    .hud-bottom { display:flex; justify-content:space-between; align-items:flex-end; }
-    #weaponHud { text-align: left; }
-    #wname { font-size: 12px; font-weight: bold; color: #ffb02e; }
-    #wammo { font-size: 10px; color: #8a99ad; }
-    .wkeys { display: flex; gap: 4px; margin-top: 4px; }
-    .wkey { font-size: 9px; background: #12161f; border: 1px solid #2f3b52; padding: 2px 4px; color: #8a99ad; }
-    .wkey.active { border-color: #3ee6d6; color: #3ee6d6; }
-    .wkey.empty { opacity: 0.4; }
-    #killfeed { position: absolute; top: 10px; right: 10px; font-size: 10px; text-align: right; color: #ff3d6e; text-shadow: 1px 1px #000; }
-    #scoreboard { position: absolute; top: 35px; right: 10px; font-size: 10px; background: rgba(0,0,0,0.4); padding: 6px; border: 1px solid rgba(255,255,255,0.05); }
-    .srow { display: flex; gap: 8px; align-items: center; justify-content: space-between; min-width: 100px; margin-bottom: 2px; }
-    .srow .k { color: #3ee6d6; font-weight: bold; }
-    #respawnOverlay { position: absolute; inset:0; background: rgba(0,0,0,0.7); display:none; flex-direction:column; justify-content:center; align-items:center; z-index:6; }
-    #respawnOverlay.active { display: flex; }
-    #toast { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #ff3d6e; color: #fff; padding: 6px 12px; font-size: 10px; opacity:0; transition: opacity 0.2s; pointer-events:none; z-index:20; }
-    #toast.show { opacity: 1; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PIXEL SIEGE — Platform Shooter Online</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="app">
 
-<div id="stage">
-  <canvas id="game" width="720" height="405"></canvas>
-  <canvas id="uiLayer"></canvas>
-
-  <!-- HUD -->
-  <div id="hud">
-    <div class="hud-top">
-      <div>
-        <div id="hpBar"><div id="hpFill"></div></div>
+  <!-- ===================== MENU ===================== -->
+  <div class="screen active" id="menuScreen">
+    <div class="panel">
+      <div class="brand">
+        <h1>PIXEL<span>SIEGE</span></h1>
+        <p>PLATFORM SHOOTER · ONLINE</p>
+        <div class="conn" id="connStatus">CONECTANDO AO SERVIDOR...</div>
       </div>
-      <div id="roomTag">SALA ----</div>
+
+      <label>SEU NOME DE GUERRA</label>
+      <input type="text" id="nameInput" maxlength="12" placeholder="JOGADOR" autocomplete="off">
+
+      <button class="btn primary" id="btnCreate">
+        CRIAR SALA
+        <small>gera um código de 4 letras para os outros entrarem</small>
+      </button>
+      <button class="btn accent" id="btnShowJoin">
+        ENTRAR EM SALA
+        <small>use o código que o host compartilhou</small>
+      </button>
+
+      <div id="joinBox" style="display:none;margin-top:10px;">
+        <label>CÓDIGO DA SALA</label>
+        <input type="text" id="codeInput" maxlength="4" placeholder="EX: WSPH" autocomplete="off" style="text-transform:uppercase;text-align:center;">
+        <button class="btn primary" id="btnJoin">ENTRAR</button>
+      </div>
+
+      <div class="controls">
+        <b>CONTROLES</b>
+        A/D ou ← → mover · W/↑/ESPAÇO pular · MOUSE mirar<br>
+        CLIQUE ESQ atacar · CLIQUE DIR espada · 1/2/RODA trocar arma<br>
+        E coletar arma · arma vazia + clique = arremesso (atordoa)
+      </div>
     </div>
-    <div id="killfeed"></div>
-    <div id="scoreboard"></div>
-    <div class="hud-bottom">
-      <div id="weaponHud">
-        <div id="wname">ESPADA</div>
-        <div id="wammo">SEM ARMA DE FOGO</div>
-        <div class="wkeys">
-          <div class="wkey active" data-w="sword">[1] MELEE</div>
-          <div class="wkey empty" data-w="gun">[2] ARMA</div>
+  </div>
+
+  <!-- ===================== LOBBY ===================== -->
+  <div class="screen" id="lobbyScreen">
+    <div class="panel">
+      <div class="brand">
+        <h1 style="font-size:1.3rem;">SALA DE ESPERA</h1>
+      </div>
+      <div class="hint">CÓDIGO DA SALA — compartilhe com os outros jogadores</div>
+      <div class="code-box" id="codeBox"></div>
+
+      <ul class="player-list" id="playerList"></ul>
+
+      <button class="btn primary" id="btnStart" style="margin-top:16px;">INICIAR PARTIDA</button>
+      <div class="hint" id="waitHint" style="margin-top:16px;display:none;">aguardando o host iniciar a partida...</div>
+      <div class="back-link" id="btnLeaveLobby">‹ sair da sala</div>
+    </div>
+  </div>
+
+  <!-- ===================== GAME ===================== -->
+  <div class="screen" id="gameScreen">
+    <div id="stage">
+      <canvas id="game" width="720" height="405"></canvas>
+      <canvas id="uiLayer"></canvas>
+      <div id="hud">
+        <div id="roomTag"></div>
+        <button class="btn" id="exitBtn" style="padding:6px 10px;font-size:.65rem;width:auto;">SAIR</button>
+
+        <div id="scoreboard"></div>
+        <div id="killfeed"></div>
+
+        <div id="hpWrap">
+          <div id="hpLabel">VIDA <span id="hpNum">100</span></div>
+          <div id="hpBar"><div id="hpFill"></div></div>
+        </div>
+
+        <div id="weaponHud">
+          <div class="wname" id="wname">ESPADA</div>
+          <div class="wammo" id="wammo"></div>
+          <div class="wkeys">
+            <div class="wkey active" data-w="sword">1</div>
+            <div class="wkey empty" data-w="gun">2</div>
+          </div>
+        </div>
+
+        <div id="respawnOverlay">
+          <h2>VOCÊ FOI ELIMINADO</h2>
+          <div class="by" id="respawnBy"></div>
+          <div class="n" id="respawnNum">3</div>
         </div>
       </div>
-      <button id="exitBtn" style="font-size:10px; padding:4px 8px; margin:0;">SAIR</button>
     </div>
   </div>
 
-  <!-- RESPAWN -->
-  <div id="respawnOverlay">
-    <h2 style="color:#ff3d6e; font-size:18px;">VOCÊ MORREU</h2>
-    <p style="margin:5px 0 0;">RENASCENDO EM <span id="respawnNum">3</span>s...</p>
-  </div>
-
-  <!-- MENU INICIAL -->
-  <div id="menuScreen" class="screen active">
-    <h1>PIXEL SIEGE</h1>
-    <p>PLATFORM SHOOTER MULTIPLAYER</p>
-    <input type="text" id="nameInput" placeholder="SEU NICKNAME" maxlength="12">
-    <div style="margin-top: 10px;">
-      <button id="btnCreate">CRIAR SALA</button>
-      <button id="btnShowJoin">ENTRAR EM SALA</button>
-    </div>
-    <div id="joinBox" style="display:none; margin-top: 10px;">
-      <input type="text" id="codeInput" placeholder="CÓDIGO (4 LETRAS)" maxlength="4">
-      <br>
-      <button id="btnJoin">CONFIRMAR</button>
-    </div>
-  </div>
-
-  <!-- LOBBY -->
-  <div id="lobbyScreen" class="screen">
-    <p style="margin:0;">CÓDIGO DA SALA:</p>
-    <div id="codeBox"></div>
-    <p style="margin-bottom:5px;">JOGADORES NA SALA:</p>
-    <ul id="playerList"></ul>
-    <button id="btnStart" style="display:none;">INICIAR JOGO</button>
-    <button id="btnLeaveLobby" class="alt">CANCELAR</button>
-  </div>
-
-  <div id="toast"></div>
 </div>
+<div class="toast" id="toast"></div>
 
-<!-- SOCET.IO CARREGADO VIA CDN -->
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="shared.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
