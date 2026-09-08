@@ -14,6 +14,10 @@
 const { WORLD_W, WORLD_H, PLATFORMS: BASE_PLATFORMS, SPAWNS, WEAPONS, DROP_FALL_SPEED, DROP_SIZE,
         PICKUP_RADIUS, THROW_SPEED, THROW_LIFE, THROW_SIZE, STUN_MS, RESPAWN_MS } = PS;
 
+/* Novas constantes para a mecânica do Golpe Forte da Espada */
+const HEAVY_CHARGE_TIME = 800; // Tempo em milissegundos para carregar 100%
+const HEAVY_HOLD_MAX = 2000;   // Tempo máximo de retenção antes de disparar automaticamente
+
 /* Cópias dinâmicas das plataformas para movimentação */
 let platforms = BASE_PLATFORMS.map((p, i) => ({
   ...p,
@@ -71,7 +75,8 @@ let lastKillerName = null;
 let matchStartTime = 0;
 
 const input = { left: false, right: false, up: false, down: false, mouseX: 360, mouseY: 203, firing: false,
-                jumpPressedAt: -1e9, lastGroundAt: -1e9, dropPlatformUntil: 0 };
+                jumpPressedAt: -1e9, lastGroundAt: -1e9, dropPlatformUntil: 0,
+                heavyCharging: false, heavyChargeStart: 0 };
 
 /* =========================================================
    HELPERS
@@ -157,6 +162,7 @@ const sfxJump   = () => beep(400, 0.09, 'triangle', 0.04, 650);
 const sfxJump2  = () => beep(560, 0.09, 'triangle', 0.045, 900);
 const sfxDeath  = () => beep(220, 0.4, 'sawtooth', 0.08, 40);
 const sfxSwing  = () => beep(260, 0.09, 'triangle', 0.05, 120);
+const sfxHeavySwing = () => beep(180, 0.2, 'sawtooth', 0.08, 60);
 const sfxThrow  = () => beep(200, 0.1, 'square', 0.04, 90);
 const sfxPickup = () => beep(600, 0.12, 'triangle', 0.05, 900);
 const sfxKill   = () => { beep(700, 0.08, 'square', 0.05, 1000); setTimeout(() => beep(1000, 0.12, 'square', 0.05, 1400), 70); };
@@ -308,11 +314,21 @@ socket.on('shoot', (msg) => {
 });
 
 socket.on('melee', (msg) => {
-  spawnSwordSwing(msg.x, msg.y, msg.angle, WEAPONS.sword.color);
+  const isHeavy = !!msg.isHeavy;
+  const dmg = isHeavy ? WEAPONS.sword.damage * 2 : WEAPONS.sword.damage;
+  const range = isHeavy ? WEAPONS.sword.range * 1.4 : WEAPONS.sword.range;
+  const arc = isHeavy ? WEAPONS.sword.arc * 1.2 : WEAPONS.sword.arc;
+
+  if (isHeavy) {
+    spawnHeavySwordSwing(msg.x, msg.y, msg.angle, '#ff3d6e');
+  } else {
+    spawnSwordSwing(msg.x, msg.y, msg.angle, WEAPONS.sword.color);
+  }
+
   if (selfPlayer && selfPlayer.alive) {
     const cx = selfPlayer.x + selfPlayer.w / 2, cy = selfPlayer.y + selfPlayer.h / 2 - 2;
-    if (pointInMeleeArc(cx, cy, msg.x, msg.y, msg.angle, WEAPONS.sword.range, WEAPONS.sword.arc)) {
-      applyDamageToSelf(WEAPONS.sword.damage, msg.id, cx, cy);
+    if (pointInMeleeArc(cx, cy, msg.x, msg.y, msg.angle, range, arc)) {
+      applyDamageToSelf(dmg, msg.id, cx, cy);
     }
   }
 });
@@ -438,6 +454,8 @@ function resetToMenu() {
   roomCode = null;
   bulletsSelf = []; bulletsIncoming = []; throwsSelf = []; throwsIncoming = []; drops = []; particles = [];
   input.left = input.right = input.up = input.down = false;
+  input.heavyCharging = false;
+  input.heavyChargeStart = 0;
   $('#respawnOverlay').classList.remove('active');
   $('#killfeed').innerHTML = '';
   $('#scoreboard').innerHTML = '';
@@ -462,6 +480,8 @@ function startMatch() {
 
   bulletsSelf = []; bulletsIncoming = []; particles = [];
   drops = []; throwsSelf = []; throwsIncoming = [];
+  input.heavyCharging = false;
+  input.heavyChargeStart = 0;
   $('#respawnOverlay').classList.remove('active');
   updateWeaponHud();
   renderScoreboard();
@@ -506,7 +526,10 @@ function bindGameInput() {
       if (selfPlayer && selfPlayer.alive && selfPlayer.vy < 0) selfPlayer.vy *= JUMP_CUT_MULTIPLIER;
     }
   });
-  window.addEventListener('blur', () => { input.left = input.right = input.up = input.down = input.firing = false; });
+  window.addEventListener('blur', () => {
+    input.left = input.right = input.up = input.down = input.firing = false;
+    if (input.heavyCharging) cancelHeavyCharge();
+  });
 
   canvas.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
@@ -522,22 +545,28 @@ function bindGameInput() {
       else if (selfPlayer.ammo > 0) tryShoot();
       else throwWeapon();
     } else if (e.button === 2) {
-      performSwordAttack();
+      if (!selfPlayer || !selfPlayer.alive || isStunned(selfPlayer)) return;
+      if (selfPlayer.weapon === 'sword') startHeavyCharge();
     }
   });
-  window.addEventListener('mouseup', e => { if (e.button === 0) input.firing = false; });
+  window.addEventListener('mouseup', e => {
+    if (e.button === 0) input.firing = false;
+    if (e.button === 2 && input.heavyCharging) releaseHeavyCharge();
+  });
   canvas.addEventListener('wheel', e => { e.preventDefault(); cycleWeapon(); }, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
 
 function cycleWeapon() {
   if (!selfPlayer) return;
+  if (input.heavyCharging) cancelHeavyCharge();
   if (selfPlayer.weapon === 'sword') { if (selfPlayer.gunType) switchWeapon(selfPlayer.gunType); }
   else switchWeapon('sword');
 }
 function switchWeapon(w) {
   if (!selfPlayer || !selfPlayer.alive) return;
   if (w !== 'sword' && selfPlayer.gunType !== w) return;
+  if (input.heavyCharging) cancelHeavyCharge();
   selfPlayer.weapon = w;
   updateWeaponHud();
 }
@@ -586,7 +615,7 @@ function tryShoot() {
 }
 
 /* =========================================================
-   ESPADA
+   ESPADA E GOLPE FORTE
 ========================================================= */
 function pointInMeleeArc(px, py, ox, oy, angle, range, arc) {
   const dx = px - ox, dy = py - oy;
@@ -598,6 +627,7 @@ function pointInMeleeArc(px, py, ox, oy, angle, range, arc) {
 }
 function performSwordAttack() {
   if (!selfPlayer || !selfPlayer.alive || isStunned(selfPlayer)) return;
+  if (input.heavyCharging) cancelHeavyCharge();
   const w = WEAPONS.sword;
   const now = performance.now();
   if (now - selfPlayer.lastMelee < w.cooldown) return;
@@ -605,7 +635,62 @@ function performSwordAttack() {
   const { cx, cy, angle } = aimAngle();
   spawnSwordSwing(cx, cy, angle, w.color);
   sfxSwing();
-  socket.emit('melee', { x: cx, y: cy, angle });
+  socket.emit('melee', { x: cx, y: cy, angle, isHeavy: false });
+}
+
+function startHeavyCharge() {
+  if (!selfPlayer || !selfPlayer.alive || isStunned(selfPlayer)) return;
+  const now = performance.now();
+  if (now - selfPlayer.lastMelee < WEAPONS.sword.cooldown) return;
+  input.heavyCharging = true;
+  input.heavyChargeStart = now;
+}
+
+function cancelHeavyCharge() {
+  input.heavyCharging = false;
+  input.heavyChargeStart = 0;
+}
+
+function releaseHeavyCharge() {
+  if (!input.heavyCharging || !selfPlayer || !selfPlayer.alive || isStunned(selfPlayer)) {
+    cancelHeavyCharge();
+    return;
+  }
+  const elapsed = performance.now() - input.heavyChargeStart;
+  cancelHeavyCharge();
+
+  if (elapsed >= HEAVY_CHARGE_TIME) {
+    performHeavyAttack();
+  } else {
+    performSwordAttack();
+  }
+}
+
+function performHeavyAttack() {
+  const w = WEAPONS.sword;
+  selfPlayer.lastMelee = performance.now();
+  const { cx, cy, angle } = aimAngle();
+
+  spawnHeavySwordSwing(cx, cy, angle, '#ff3d6e');
+  sfxHeavySwing();
+
+  // Impulso do ataque pesado na direção do ataque
+  selfPlayer.vx += Math.cos(angle) * 3.5;
+  selfPlayer.vy += Math.sin(angle) * 3.5;
+
+  socket.emit('melee', { x: cx, y: cy, angle, isHeavy: true });
+}
+
+function updateHeavyCharge() {
+  if (!input.heavyCharging) return;
+  if (!selfPlayer || !selfPlayer.alive || isStunned(selfPlayer) || selfPlayer.weapon !== 'sword') {
+    cancelHeavyCharge();
+    return;
+  }
+  const elapsed = performance.now() - input.heavyChargeStart;
+  if (elapsed >= HEAVY_HOLD_MAX) {
+    releaseHeavyCharge();
+  }
 }
 
 /* =========================================================
@@ -626,6 +711,7 @@ function throwWeapon() {
 }
 function applyStunToSelf(byId, hx, hy) {
   if (!selfPlayer.alive) return;
+  if (input.heavyCharging) cancelHeavyCharge();
   selfPlayer.stunUntil = performance.now() + STUN_MS;
   spawnStunSpark(hx, hy);
   sfxHit();
@@ -696,6 +782,15 @@ function spawnSwordSwing(x, y, angle, color) {
   for (let i = 0; i <= steps; i++) {
     const a = angle - w.arc / 2 + (w.arc * i / steps);
     particles.push({ x: x + Math.cos(a) * 6, y: y + Math.sin(a) * 6, vx: Math.cos(a) * 1.6, vy: Math.sin(a) * 1.6, life: 9, color, size: 1.6 });
+  }
+}
+function spawnHeavySwordSwing(x, y, angle, color) {
+  const w = WEAPONS.sword, steps = 12;
+  const heavyRange = w.range * 1.4;
+  const heavyArc = w.arc * 1.2;
+  for (let i = 0; i <= steps; i++) {
+    const a = angle - heavyArc / 2 + (heavyArc * i / steps);
+    particles.push({ x: x + Math.cos(a) * (heavyRange * 0.6), y: y + Math.sin(a) * (heavyRange * 0.6), vx: Math.cos(a) * 3.2, vy: Math.sin(a) * 3.2, life: 14, color, size: 2.5 });
   }
 }
 function spawnStunSpark(x, y) {
@@ -849,6 +944,7 @@ function updateThrows(dt) {
 
 function applyDamageToSelf(dmg, byId, hx, hy) {
   if (!selfPlayer.alive) return;
+  if (input.heavyCharging) cancelHeavyCharge();
   selfPlayer.hp -= dmg;
   spawnHitSpark(hx, hy);
   sfxHit();
@@ -955,6 +1051,20 @@ function drawNameplates() {
     uiCtx.strokeText(p.name.slice(0, 10), cx, ny);
     uiCtx.fillStyle = p.id === myId ? '#3ee6d6' : '#eef2f8';
     uiCtx.fillText(p.name.slice(0, 10), cx, ny);
+
+    /* Renderização da barra de carregamento do golpe pesado */
+    if (p.id === myId && input.heavyCharging) {
+      const chargeRatio = clamp((performance.now() - input.heavyChargeStart) / HEAVY_CHARGE_TIME, 0, 1);
+      const cBarW = 20 * uiScale, cBarH = Math.max(3, 3 * uiScale);
+      const cBarX = (x + p.w / 2) * uiScale - cBarW / 2;
+      const cBarY = (y + p.h + 5) * uiScale;
+
+      uiCtx.fillStyle = 'rgba(0,0,0,.7)';
+      uiCtx.fillRect(cBarX - 1, cBarY - 1, cBarW + 2, cBarH + 2);
+      uiCtx.fillStyle = chargeRatio >= 1 ? '#ff3d6e' : '#ffd76b';
+      uiCtx.fillRect(cBarX, cBarY, cBarW * chargeRatio, cBarH);
+    }
+
     if (isStunned(p)) {
       uiCtx.font = Math.max(10, Math.round(8 * uiScale)) + 'px "Courier New", monospace';
       const spin = performance.now() / 140;
@@ -1059,6 +1169,7 @@ function loop(now) {
   updatePlatforms(now);
   updatePhysics(selfPlayer, dt);
   updateRespawn();
+  updateHeavyCharge();
   if (input.firing && selfPlayer.alive && !isStunned(selfPlayer) && selfPlayer.weapon !== 'sword' && selfPlayer.ammo > 0) {
     if (WEAPONS[selfPlayer.weapon].auto) tryShoot();
   }
