@@ -11,24 +11,36 @@
 /* =========================================================
    CONSTANTES (compartilhadas com o servidor via shared.js)
 ========================================================= */
-const { WORLD_W, WORLD_H, PLATFORMS, SPAWNS, WEAPONS, DROP_FALL_SPEED, DROP_SIZE,
+const { WORLD_W, WORLD_H, PLATFORMS: BASE_PLATFORMS, SPAWNS, WEAPONS, DROP_FALL_SPEED, DROP_SIZE,
         PICKUP_RADIUS, THROW_SPEED, THROW_LIFE, THROW_SIZE, STUN_MS, RESPAWN_MS } = PS;
 
-/* Física "arcade" — idêntica ao alpha */
+/* Cópias dinâmicas das plataformas para movimentação */
+let platforms = BASE_PLATFORMS.map((p, i) => ({
+  ...p,
+  baseX: p.x,
+  baseY: p.y,
+  // Adiciona padrões de movimento variados por plataforma
+  moveAxis: i % 2 === 0 ? 'x' : 'y',
+  moveRange: i % 2 === 0 ? 35 : 20,
+  moveSpeed: 0.0015 + (i * 0.0005)
+}));
+
+/* Física "arcade" */
 const GRAVITY = 0.42;
 const MOVE_SPEED = 1.7;
 const GROUND_MOVE_SPEED = 2.55;
 const GROUND_ACCEL = GROUND_MOVE_SPEED * 0.4;
 const AIR_ACCEL = MOVE_SPEED * 0.35;
-const JUMP_VEL = -6.6;
-const AIR_JUMP_VEL = -6.0;   // pulo duplo é levemente mais fraco que o do chão
-const MAX_AIR_JUMPS = 1;     // 1 = pulo duplo (chão + 1 no ar)
-const JUMP_CUT_MULTIPLIER = 0.45;
+const JUMP_VEL = -7.8;        // Aumentado para permitir pular mais alto ao segurar
+const AIR_JUMP_VEL = -6.2;    // Pulo duplo
+const MAX_AIR_JUMPS = 1;      // 1 = pulo duplo (chão + 1 no ar)
+const JUMP_CUT_MULTIPLIER = 0.3; // Quanto menor, mais controle sobre a altura do pulo ao soltar
 const FRICTION = 0.78;
 const AIR_FRICTION = 0.9;
 const REF_FRAME_MS = 1000 / 60;
-const COYOTE_MS = 80;        // pulo permitido logo após sair da borda
-const JUMP_BUFFER_MS = 100;  // pulo registrado um pouco antes de tocar o chão
+const COYOTE_MS = 80;         // pulo permitido logo após sair da borda
+const JUMP_BUFFER_MS = 100;   // pulo registrado um pouco antes de tocar o chão
+const PLATFORM_DROP_COOLDOWN = 200; // Tempo em ms ignorando plataformas ao pressionar 'S'
 
 const STATE_RATE = 55; // ms entre envios de estado
 const REMOTE_TIMEOUT = 8000;
@@ -56,9 +68,10 @@ let drops = [];
 let particles = [];
 let lastStateSent = 0;
 let lastKillerName = null;
+let matchStartTime = 0;
 
-const input = { left: false, right: false, up: false, mouseX: 360, mouseY: 203, firing: false,
-                jumpPressedAt: -1e9, lastGroundAt: -1e9 };
+const input = { left: false, right: false, up: false, down: false, mouseX: 360, mouseY: 203, firing: false,
+                jumpPressedAt: -1e9, lastGroundAt: -1e9, dropPlatformUntil: 0 };
 
 /* =========================================================
    HELPERS
@@ -152,7 +165,6 @@ const sfxKill   = () => { beep(700, 0.08, 'square', 0.05, 1000); setTimeout(() =
    PLAYER FACTORY
 ========================================================= */
 function makeSpawn() {
-  // Prefere spawns longe dos inimigos vivos
   const others = [...players.values()].filter(p => p.id !== myId && p.alive);
   if (!others.length) return SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
   let best = null, bestD = -1;
@@ -337,7 +349,6 @@ socket.on('dropspawn', (d) => {
 socket.on('droppickup', ({ dropId, byId, weapon }) => {
   drops = drops.filter(d => d.id !== dropId);
   if (byId === myId && selfPlayer && selfPlayer.alive) {
-    // Confirmado pelo servidor: equipa a arma
     selfPlayer.gunType = weapon;
     selfPlayer.ammo = WEAPONS[weapon].mag;
     selfPlayer.weapon = weapon;
@@ -426,7 +437,7 @@ function resetToMenu() {
   isHost = false;
   roomCode = null;
   bulletsSelf = []; bulletsIncoming = []; throwsSelf = []; throwsIncoming = []; drops = []; particles = [];
-  input.left = input.right = input.up = input.firing = false;
+  input.left = input.right = input.up = input.down = false;
   $('#respawnOverlay').classList.remove('active');
   $('#killfeed').innerHTML = '';
   $('#scoreboard').innerHTML = '';
@@ -439,6 +450,7 @@ function resetToMenu() {
 let lastTime = performance.now();
 function startMatch() {
   currentState = 'playing';
+  matchStartTime = performance.now();
   showScreen('gameScreen');
   $('#roomTag').textContent = 'SALA ' + roomCode;
 
@@ -473,6 +485,10 @@ function bindGameInput() {
     const k = e.key;
     if (['a', 'A', 'ArrowLeft'].includes(k)) input.left = true;
     if (['d', 'D', 'ArrowRight'].includes(k)) input.right = true;
+    if (['s', 'S', 'ArrowDown'].includes(k)) {
+      input.down = true;
+      input.dropPlatformUntil = performance.now() + PLATFORM_DROP_COOLDOWN;
+    }
     if (['w', 'W', 'ArrowUp', ' '].includes(k)) { input.up = true; input.jumpPressedAt = performance.now(); e.preventDefault(); }
     if (k === '1') switchWeapon('sword');
     if (k === '2') { if (selfPlayer && selfPlayer.gunType) switchWeapon(selfPlayer.gunType); else toast('SEM ARMA DE FOGO — PRESSIONE E PERTO DE UM DROP'); }
@@ -483,13 +499,14 @@ function bindGameInput() {
     const k = e.key;
     if (['a', 'A', 'ArrowLeft'].includes(k)) input.left = false;
     if (['d', 'D', 'ArrowRight'].includes(k)) input.right = false;
+    if (['s', 'S', 'ArrowDown'].includes(k)) input.down = false;
     if (['w', 'W', 'ArrowUp', ' '].includes(k)) {
       input.up = false;
-      // pulo variável
+      // pulo variável: soltar o botão faz cair mais rápido
       if (selfPlayer && selfPlayer.alive && selfPlayer.vy < 0) selfPlayer.vy *= JUMP_CUT_MULTIPLIER;
     }
   });
-  window.addEventListener('blur', () => { input.left = input.right = input.up = input.firing = false; });
+  window.addEventListener('blur', () => { input.left = input.right = input.up = input.down = input.firing = false; });
 
   canvas.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
@@ -562,7 +579,6 @@ function tryShoot() {
   bulletsSelf.push({ id: bid, x: bx, y: by, vx: Math.cos(angle) * w.bulletSpeed, vy: Math.sin(angle) * w.bulletSpeed, weapon: selfPlayer.weapon, life: w.life });
   spawnMuzzleFlash(bx, by, angle, w.color);
   sfxShoot(selfPlayer.weapon);
-  // recuo leve
   selfPlayer.vx -= Math.cos(angle) * (w.damage / 60);
 
   socket.emit('shoot', { bid, x: bx, y: by, angle, weapon: selfPlayer.weapon });
@@ -617,6 +633,24 @@ function applyStunToSelf(byId, hx, hy) {
 }
 
 /* =========================================================
+   MOVIMENTO DAS PLATAFORMAS (DINÂMICO)
+========================================================= */
+function updatePlatforms(now) {
+  const elapsed = now - matchStartTime;
+  // Gradualmente aumenta a amplitude do movimento ao longo do tempo (até um teto)
+  const intensity = Math.min(1.0, elapsed / 30000); // 30 segundos para atingir movimento total
+
+  platforms.forEach(plat => {
+    const offset = Math.sin(elapsed * plat.moveSpeed) * plat.moveRange * intensity;
+    if (plat.moveAxis === 'x') {
+      plat.x = plat.baseX + offset;
+    } else {
+      plat.y = plat.baseY + offset;
+    }
+  });
+}
+
+/* =========================================================
    DROPS
 ========================================================= */
 function updateDrops() {
@@ -642,7 +676,6 @@ function tryPickupDrop() {
   if (!selfPlayer || !selfPlayer.alive || isStunned(selfPlayer)) return;
   const best = nearestDrop();
   if (!best) return;
-  // O servidor confirma (primeiro a pedir leva) via 'droppickup'
   socket.emit('droppickup', { dropId: best.id });
 }
 
@@ -673,7 +706,7 @@ function spawnDust(x, y) {
 }
 function spawnAirJumpBurst(x, y, color) {
   for (let i = 0; i < 8; i++) {
-    const a = Math.PI * (i / 7) + Math.PI; // leque para baixo, tipo "empurrão" do ar
+    const a = Math.PI * (i / 7) + Math.PI;
     particles.push({ x, y, vx: Math.cos(a) * rand(0.8, 2.2), vy: Math.sin(a) * rand(0.4, 1.6) + 0.4, life: 14, color: color || '#3ee6d6', size: 1.6 });
   }
 }
@@ -726,7 +759,6 @@ function updatePhysics(p, dt) {
     input.jumpPressedAt = -1e9; input.lastGroundAt = -1e9;
     sfxJump();
   } else if (!stunned && wantsJump && !canJump && p.airJumpsUsed < MAX_AIR_JUMPS) {
-    // Pulo duplo: já está no ar, coyote/chão não valem, mas ainda tem pulo extra
     p.vy = AIR_JUMP_VEL;
     p.airJumpsUsed++;
     input.jumpPressedAt = -1e9;
@@ -745,17 +777,21 @@ function updatePhysics(p, dt) {
   const fallSpeed = p.vy;
   let onGround = false;
   p.y += p.vy * step;
-  for (const plat of PLATFORMS) {
-    // Plataformas são "atravessáveis": só param o jogador quando ele está
-    // caindo e pousa em cima. Pulando por baixo ou vindo pelo lado, atravessa
-    // direto — sem trava, sem "bonk" na cabeça.
-    if (p.vy >= 0 && rectsOverlap(p, plat)) {
-      const prevBottom = p.y + p.h - p.vy * step;
-      if (prevBottom <= plat.y + 2) {
-        p.y = plat.y - p.h; p.vy = 0; onGround = true;
+
+  // Checa se o jogador pode descer da plataforma
+  const isDroppingPlatform = now < input.dropPlatformUntil;
+
+  if (!isDroppingPlatform) {
+    for (const plat of platforms) {
+      if (p.vy >= 0 && rectsOverlap(p, plat)) {
+        const prevBottom = p.y + p.h - p.vy * step;
+        if (prevBottom <= plat.y + 4) {
+          p.y = plat.y - p.h; p.vy = 0; onGround = true;
+        }
       }
     }
   }
+
   if (p.y + p.h > WORLD_H) { p.y = WORLD_H - p.h; p.vy = 0; onGround = true; }
   if (onGround && wasAirborne && fallSpeed > 3) spawnDust(p.x + p.w / 2, p.y + p.h);
   if (onGround) p.airJumpsUsed = 0;
@@ -766,7 +802,6 @@ function updatePhysics(p, dt) {
   p.facing = (input.mouseX < cx) ? -1 : 1;
 }
 
-/* Liang-Barsky: segmento vs retângulo (evita tunneling de balas rápidas) */
 function segmentIntersectsRect(x0, y0, x1, y1, rx, ry, rw, rh) {
   let t0 = 0, t1 = 1;
   const dx = x1 - x0, dy = y1 - y0;
@@ -783,7 +818,7 @@ function segmentIntersectsRect(x0, y0, x1, y1, rx, ry, rw, rh) {
   return true;
 }
 function hitsWorldSegment(px, py, x, y) {
-  for (const plat of PLATFORMS) if (segmentIntersectsRect(px, py, x, y, plat.x, plat.y, plat.w, plat.h)) return true;
+  for (const plat of platforms) if (segmentIntersectsRect(px, py, x, y, plat.x, plat.y, plat.w, plat.h)) return true;
   return x < 0 || x > WORLD_W || y < 0 || y > WORLD_H || px < 0 || px > WORLD_W || py < 0 || py > WORLD_H;
 }
 
@@ -859,7 +894,7 @@ function updateRemoteInterp() {
       p.y += (p.ry - p.y) * 0.35;
     }
     if (currentState === 'playing' && p.hasRemote && performance.now() - p.lastSeen > REMOTE_TIMEOUT) {
-      p.alive = false; // sem estado há muito tempo — não desenha até voltar
+      p.alive = false;
     }
   });
 }
@@ -876,7 +911,7 @@ function drawBackground() {
   for (let x = 0; x < WORLD_W; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD_H); ctx.stroke(); }
 }
 function drawPlatforms() {
-  PLATFORMS.forEach(p => {
+  platforms.forEach(p => {
     ctx.fillStyle = '#1c2433'; ctx.fillRect(p.x, p.y, p.w, p.h);
     ctx.fillStyle = '#2f3b52'; ctx.fillRect(p.x, p.y, p.w, 2);
     ctx.strokeStyle = '#0a0d14'; ctx.lineWidth = 1;
@@ -952,7 +987,6 @@ function drawBullets() {
     const w = WEAPONS[b.weapon];
     ctx.fillStyle = w.color;
     ctx.fillRect(b.x - w.size / 2, b.y - w.size / 2, w.size, w.size);
-    // rastro
     ctx.globalAlpha = 0.35;
     ctx.fillRect(b.x - b.vx * 0.5 - w.size / 2, b.y - b.vy * 0.5 - w.size / 2, w.size, w.size);
     ctx.globalAlpha = 1;
@@ -964,7 +998,7 @@ function drawDrops() {
     const w = WEAPONS[d.weapon];
     const bob = d.landed ? Math.sin(t / 220 + d.x) * 1.2 : 0;
     const dx = Math.round(d.x - DROP_SIZE / 2), dy = Math.round(d.y + bob);
-    if (!d.landed) { // paraquedas
+    if (!d.landed) {
       ctx.fillStyle = 'rgba(231,236,243,.75)';
       ctx.fillRect(dx - 3, dy - 8, DROP_SIZE + 6, 3);
       ctx.fillRect(dx - 1, dy - 5, DROP_SIZE + 2, 2);
@@ -1022,6 +1056,7 @@ function loop(now) {
   if (currentState !== 'playing') return;
   const dt = Math.min(33, now - lastTime); lastTime = now;
 
+  updatePlatforms(now);
   updatePhysics(selfPlayer, dt);
   updateRespawn();
   if (input.firing && selfPlayer.alive && !isStunned(selfPlayer) && selfPlayer.weapon !== 'sword' && selfPlayer.ammo > 0) {
@@ -1068,6 +1103,7 @@ window.__ps = {
   get self() { return selfPlayer; },
   get drops() { return drops; },
   get state() { return currentState; },
+  get platforms() { return platforms; },
 };
 
 })();
