@@ -21,6 +21,8 @@ const GROUND_MOVE_SPEED = 2.55;
 const GROUND_ACCEL = GROUND_MOVE_SPEED * 0.4;
 const AIR_ACCEL = MOVE_SPEED * 0.35;
 const JUMP_VEL = -6.6;
+const AIR_JUMP_VEL = -6.0;   // pulo duplo é levemente mais fraco que o do chão
+const MAX_AIR_JUMPS = 1;     // 1 = pulo duplo (chão + 1 no ar)
 const JUMP_CUT_MULTIPLIER = 0.45;
 const FRICTION = 0.78;
 const AIR_FRICTION = 0.9;
@@ -139,6 +141,7 @@ const sfxShoot = (w) => w === 'pistol' ? beep(520, 0.08, 'square', 0.05, 300)
                     : beep(140, 0.25, 'sawtooth', 0.07, 60);
 const sfxHit    = () => beep(180, 0.12, 'square', 0.06, 60);
 const sfxJump   = () => beep(400, 0.09, 'triangle', 0.04, 650);
+const sfxJump2  = () => beep(560, 0.09, 'triangle', 0.045, 900);
 const sfxDeath  = () => beep(220, 0.4, 'sawtooth', 0.08, 40);
 const sfxSwing  = () => beep(260, 0.09, 'triangle', 0.05, 120);
 const sfxThrow  = () => beep(200, 0.1, 'square', 0.04, 90);
@@ -165,6 +168,7 @@ function newPlayerState(id, name, color, host) {
     id, name, color, host: !!host,
     x: sp.x, y: sp.y, w: 10, h: 16,
     vx: 0, vy: 0, onGround: false,
+    airJumpsUsed: 0,
     angle: 0, facing: 1,
     weapon: 'sword', gunType: null, ammo: 0,
     lastShot: 0, lastMelee: 0,
@@ -667,6 +671,12 @@ function spawnStunSpark(x, y) {
 function spawnDust(x, y) {
   for (let i = 0; i < 4; i++) particles.push({ x, y, vx: rand(-1, 1), vy: rand(-0.6, -0.1), life: 10, color: '#4a5568', size: 1.2 });
 }
+function spawnAirJumpBurst(x, y, color) {
+  for (let i = 0; i < 8; i++) {
+    const a = Math.PI * (i / 7) + Math.PI; // leque para baixo, tipo "empurrão" do ar
+    particles.push({ x, y, vx: Math.cos(a) * rand(0.8, 2.2), vy: Math.sin(a) * rand(0.4, 1.6) + 0.4, life: 14, color: color || '#3ee6d6', size: 1.6 });
+  }
+}
 
 /* =========================================================
    KILL FEED / PLACAR
@@ -715,6 +725,13 @@ function updatePhysics(p, dt) {
     p.vy = JUMP_VEL; p.onGround = false;
     input.jumpPressedAt = -1e9; input.lastGroundAt = -1e9;
     sfxJump();
+  } else if (!stunned && wantsJump && !canJump && p.airJumpsUsed < MAX_AIR_JUMPS) {
+    // Pulo duplo: já está no ar, coyote/chão não valem, mas ainda tem pulo extra
+    p.vy = AIR_JUMP_VEL;
+    p.airJumpsUsed++;
+    input.jumpPressedAt = -1e9;
+    spawnAirJumpBurst(p.x + p.w / 2, p.y + p.h, p.color);
+    sfxJump2();
   }
 
   p.vy += GRAVITY * step;
@@ -743,6 +760,7 @@ function updatePhysics(p, dt) {
   }
   if (p.y + p.h > WORLD_H) { p.y = WORLD_H - p.h; p.vy = 0; onGround = true; }
   if (onGround && wasAirborne && fallSpeed > 3) spawnDust(p.x + p.w / 2, p.y + p.h);
+  if (onGround) p.airJumpsUsed = 0;
   p.onGround = onGround;
 
   const cx = p.x + p.w / 2, cy = p.y + p.h / 2 - 2;
@@ -829,6 +847,7 @@ function updateRespawn() {
     selfPlayer.hp = 100; selfPlayer.alive = true;
     selfPlayer.weapon = 'sword'; selfPlayer.gunType = null; selfPlayer.ammo = 0;
     selfPlayer.stunUntil = 0;
+    selfPlayer.airJumpsUsed = 0;
     updateWeaponHud();
     $('#respawnOverlay').classList.remove('active');
   }
