@@ -746,15 +746,13 @@ function updatePhysics(p, dt) {
   let onGround = false;
   p.y += p.vy * step;
   for (const plat of PLATFORMS) {
-    if (rectsOverlap(p, plat)) {
+    // Plataformas são "atravessáveis": só param o jogador quando ele está
+    // caindo e pousa em cima. Pulando por baixo ou vindo pelo lado, atravessa
+    // direto — sem trava, sem "bonk" na cabeça.
+    if (p.vy >= 0 && rectsOverlap(p, plat)) {
       const prevBottom = p.y + p.h - p.vy * step;
-      if (p.vy >= 0 && prevBottom <= plat.y + 2) {
+      if (prevBottom <= plat.y + 2) {
         p.y = plat.y - p.h; p.vy = 0; onGround = true;
-      } else if (p.vy < 0 && (p.y - p.vy * step) >= plat.y + plat.h - 2) {
-        p.y = plat.y + plat.h; p.vy = 0;
-      } else {
-        if (p.x + p.w / 2 < plat.x + plat.w / 2) p.x = plat.x - p.w;
-        else p.x = plat.x + plat.w;
       }
     }
   }
